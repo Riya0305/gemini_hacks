@@ -117,8 +117,7 @@ export default function LiveChat({
   }, []);
 
   const playChunk = useCallback(async (b64: string, mime?: string) => {
-    // don't play audio when mic is muted (user muted the conversation)
-    if (!micActiveRef.current) return;
+    // Always allow model audio playback. Mic mute only affects user input.
     const ctx = await getAudioCtx();
     const pcmFloat = base64ToFloat32(b64);
     const rate = parseSampleRate(mime);
@@ -158,9 +157,7 @@ export default function LiveChat({
     // signal Gemini that audio stream ended
     try { sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }); } catch { /* ok */ }
     teardownMic();
-    // stop any playback too — user muted the conversation
-    clearPlayback();
-  }, [teardownMic, clearPlayback]);
+  }, [teardownMic]);
 
   const startMic = useCallback(async () => {
     if (micStreamRef.current) {
