@@ -23,6 +23,9 @@ Explainable Research Knowledge Graphs with Live Interaction.
 ```bash
 cd backend
 pip install -r requirements.txt
+cp .env.example .env
+# then edit .env with real keys:
+# GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 

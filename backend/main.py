@@ -1,11 +1,19 @@
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
-import fitz
 import json
-from openai import OpenAI
+import os
+from pathlib import Path
+from typing import List, Optional
+
+import fitz
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
+
+# Load backend/.env even when uvicorn is started from repo root.
+load_dotenv(Path(__file__).with_name(".env"))
 
 from .persistence import (
     create_project,
@@ -16,7 +24,9 @@ from .persistence import (
 )
 
 app = FastAPI(title="PaperGraph AI Backend")
-openai_client = OpenAI()
+gemini_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,19 +97,9 @@ def extract_json_string(text: str) -> str:
     return text
 
 
-def extract_text_from_response(response) -> str:
-    if hasattr(response, "output_text") and response.output_text:
-        return response.output_text
-    if hasattr(response, "output"):
-        pieces = []
-        for item in response.output:
-            if isinstance(item, dict) and "content" in item:
-                for content in item["content"]:
-                    if isinstance(content, dict) and content.get("type") == "output_text":
-                        pieces.append(content.get("text", ""))
-        if pieces:
-            return "".join(pieces)
-    raise ValueError("Unable to extract text from Gemini response")
+def _ensure_gemini_client():
+    if gemini_client is None:
+        raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY (or GOOGLE_API_KEY).")
 
 
 def parse_graph_data_from_text(json_text: str) -> GraphData:
@@ -109,16 +109,18 @@ def parse_graph_data_from_text(json_text: str) -> GraphData:
 
 
 def call_gemini_extract_graph(paper_text: str) -> GraphData:
+    _ensure_gemini_client()
     prompt = build_graph_extraction_prompt(paper_text)
-    # Gemini 3 Flash extraction: convert raw paper text into structured nodes + edges JSON
-    response = openai_client.responses.create(
-        model="gemini-3-flash",
-        input=prompt,
-        temperature=0.0,
-        top_p=1,
-        max_output_tokens=800,
+    response = gemini_client.models.generate_content(
+        model=gemini_model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.0,
+            top_p=1,
+            max_output_tokens=800,
+        ),
     )
-    response_text = extract_text_from_response(response)
+    response_text = response.text or ""
     return parse_graph_data_from_text(response_text)
 
 mock_graph = GraphData(
@@ -212,16 +214,18 @@ def build_live_ask_prompt(request: AskRequest) -> str:
 
 @app.post("/ask", response_model=AskResponse)
 def ask_question(request: AskRequest):
-    # Gemini 3 Flash live interaction: answer the user question using the selected connection context
+    _ensure_gemini_client()
     prompt = build_live_ask_prompt(request)
-    response = openai_client.responses.create(
-        model="gemini-3-flash",
-        input=prompt,
-        temperature=0.0,
-        top_p=1,
-        max_output_tokens=300,
+    response = gemini_client.models.generate_content(
+        model=gemini_model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.0,
+            top_p=1,
+            max_output_tokens=300,
+        ),
     )
-    answer_text = extract_text_from_response(response).strip()
+    answer_text = (response.text or "").strip()
 
     if current_graph_id:
         try:

@@ -1,9 +1,13 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from supabase import create_client
+
+load_dotenv(Path(__file__).with_name(".env"))
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
