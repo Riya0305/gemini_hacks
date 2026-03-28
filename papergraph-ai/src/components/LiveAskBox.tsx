@@ -27,7 +27,7 @@ export default function LiveAskBox({
   // Local input value for the current question being composed.
   const [question, setQuestion] = useState("");
   // Block interactions when no edge is selected or a request is already running.
-  const disabled = !selectedEdge || isAsking;
+  const disabled = isAsking;
 
   // Trim and submit the current question, then clear the input on success.
   const handleSubmit = useCallback(() => {
@@ -50,8 +50,8 @@ export default function LiveAskBox({
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          placeholder={disabled ? "Select a connection first" : "Ask a question..."}
-          disabled={!selectedEdge}
+          placeholder={isAsking ? "Asking..." : "Ask a quick question..."}
+          disabled={isAsking}
           className="flex-1 rounded-2xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-200
             placeholder:text-gray-600 focus:outline-none focus:border-cyan-accent/50 focus:ring-1 focus:ring-cyan-accent/20
             disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"

@@ -643,6 +643,7 @@ export default function Home() {
                   selectedEdge={selectedEdge}
                   selectedNode={selectedNode}
                   nodes={displayedGraphData.nodes}
+                  edges={displayedGraphData.edges}
                   askAnswer={askAnswer}
                   isAsking={isAsking}
                   onAsk={handleAsk}
@@ -699,6 +700,7 @@ export default function Home() {
               selectedEdge={selectedEdge}
               selectedNode={selectedNode}
               nodes={displayedGraphData.nodes}
+              edges={displayedGraphData.edges}
               askAnswer={askAnswer}
               isAsking={isAsking}
               onAsk={handleAsk}

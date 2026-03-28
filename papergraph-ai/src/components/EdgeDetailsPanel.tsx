@@ -9,6 +9,7 @@ interface EdgeDetailsPanelProps {
   selectedEdge: GraphEdge | null;
   selectedNode: GraphNode | null;
   nodes: GraphNode[];
+  edges: GraphEdge[];
   askAnswer: AskResponse | null;
   isAsking: boolean;
   onAsk: (question: string) => void;
@@ -16,6 +17,16 @@ interface EdgeDetailsPanelProps {
 
 function getNodeById(nodes: GraphNode[], id: string): GraphNode | null {
   return nodes.find((nodeItem) => nodeItem.id === id) ?? null;
+}
+
+/** Returns all paper nodes directly connected to a topic node via edges */
+function getSourcePapers(nodes: GraphNode[], edges: GraphEdge[], nodeId: string): GraphNode[] {
+  const connectedIds = new Set<string>();
+  for (const edge of edges) {
+    if (edge.source === nodeId) connectedIds.add(edge.target);
+    if (edge.target === nodeId) connectedIds.add(edge.source);
+  }
+  return nodes.filter((n) => connectedIds.has(n.id) && Boolean(n.paperLabel));
 }
 
 function SpeakerButton({
@@ -50,6 +61,7 @@ export default function EdgeDetailsPanel({
   selectedEdge,
   selectedNode,
   nodes,
+  edges,
   askAnswer,
   isAsking,
   onAsk,
@@ -130,92 +142,90 @@ export default function EdgeDetailsPanel({
   }
 
   if (selectedNode && !selectedEdge) {
+    const isPaperNode = Boolean(selectedNode.paperLabel);
+    const sourcePapers = isPaperNode ? [] : getSourcePapers(nodes, edges, selectedNode.id);
+    const nodeColor = selectedNode.colorHex || NODE_COLORS[selectedNode.type];
+
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-gray-800/80 bg-gray-950/90 shadow-[0_18px_60px_rgba(0,0,0,0.38)]">
-        <div className="border-b border-gray-800/80 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-accent/90">
-            5. Explain And Listen
-          </p>
-          <h2 className="mt-2 text-lg font-semibold text-gray-100">Paper Details</h2>
-        </div>
-
         <div className="panel-scroll flex flex-1 flex-col gap-5 overflow-y-auto p-5">
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span
-                className="rounded-full border px-3 py-1 text-xs font-medium"
-                style={{
-                  color: selectedNode.colorHex || NODE_COLORS[selectedNode.type],
-                  borderColor: `${selectedNode.colorHex || NODE_COLORS[selectedNode.type]}44`,
-                  backgroundColor: `${selectedNode.colorHex || NODE_COLORS[selectedNode.type]}1a`,
-                }}
-              >
-                {selectedNode.paperLabel ?? selectedNode.type}
-              </span>
-              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">
-                Graph Label
-              </span>
-            </div>
-            <h3 className="mt-4 text-2xl font-semibold leading-tight text-gray-100">
-              {selectedNode.displayLabel || selectedNode.id}
-            </h3>
-            {selectedNode.paperTitle && selectedNode.paperTitle !== selectedNode.displayLabel ? (
-              <p className="mt-3 text-sm leading-relaxed text-gray-400">
-                {selectedNode.paperTitle}
+          {/* Entity Details Card */}
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">
+              {isPaperNode ? "Paper Details" : "Entity Details"}
+            </p>
+            <h2 className="mt-2 text-3xl font-bold leading-tight text-cyan-400">
+              {isPaperNode
+                ? (selectedNode.paperTitle || selectedNode.displayLabel || selectedNode.id)
+                : (selectedNode.displayLabel || selectedNode.id)}
+            </h2>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+              {isPaperNode ? "Research Paper" : "Research Entity"}
+            </p>
+
+            {/* Source papers for topic nodes */}
+            {!isPaperNode && sourcePapers.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {sourcePapers.map((paper) => (
+                  <span
+                    key={paper.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium"
+                    style={{
+                      color: paper.colorHex || nodeColor,
+                      borderColor: `${paper.colorHex || nodeColor}44`,
+                      backgroundColor: `${paper.colorHex || nodeColor}18`,
+                    }}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                    {paper.paperTitle || paper.displayLabel || paper.id}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-400">
+                Overview
+              </h3>
+              <p className="text-sm leading-relaxed text-gray-300">
+                {selectedNode.summary || "No summary available for this entity yet."}
               </p>
-            ) : null}
+            </div>
+
+            <div className="mt-4">
+              <SpeakerButton
+                disabled={!speechSupported || !spokenText.trim()}
+                isSpeaking={isSpeaking}
+                onClick={handleToggleSpeech}
+                label="Play Explanation"
+              />
+            </div>
           </div>
 
-          {selectedNode.themeLabel ? (
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-accent/90">
-                Color Group
+          {/* Evidence */}
+          {selectedNode.evidence ? (
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-accent/90">
+                Key Evidence
               </h3>
-              <div className="flex items-start gap-3">
-                <span
-                  className="mt-1 h-3.5 w-3.5 rounded-full border border-white/20"
-                  style={{ backgroundColor: selectedNode.colorHex || NODE_COLORS[selectedNode.type] }}
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-100">{selectedNode.themeLabel}</p>
-                  <p className="mt-1 text-sm leading-relaxed text-gray-400">
-                    {selectedNode.themeDescription ||
-                      `${selectedNode.themeLabel} papers share a common research focus.`}
-                  </p>
-                </div>
-              </div>
+              <blockquote className="rounded-2xl border border-violet-accent/20 bg-violet-accent/8 p-4 font-mono text-sm italic leading-relaxed text-gray-300">
+                {selectedNode.evidence}
+              </blockquote>
             </div>
           ) : null}
 
-          <div>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-accent/90">
-              What This Paper Says
-            </h3>
-            <p className="text-sm leading-relaxed text-gray-300">
-              {selectedNode.summary ||
-                "Gemini did not return a full summary for this paper yet. Re-run extraction if you need richer paper-level analysis."}
-            </p>
+          {/* Live Ask */}
+          <div className="border-t border-gray-800/80 pt-4">
+            <LiveAskBox
+              selectedEdge={null}
+              answer={askAnswer}
+              isAsking={isAsking}
+              onAsk={onAsk}
+            />
           </div>
-
-          <div>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-accent/90">
-              Key Evidence
-            </h3>
-            <blockquote className="rounded-2xl border border-violet-accent/20 bg-violet-accent/8 p-4 font-mono text-sm italic leading-relaxed text-gray-300">
-              {selectedNode.evidence || "No evidence excerpt was returned for this paper node."}
-            </blockquote>
-          </div>
-
-          <SpeakerButton
-            disabled={!speechSupported || !spokenText.trim()}
-            isSpeaking={isSpeaking}
-            onClick={handleToggleSpeech}
-            label="Play Paper Summary"
-          />
-
-          <p className="text-xs text-gray-500">
-            Audio uses the browser speech engine when available.
-          </p>
         </div>
       </div>
     );
@@ -244,7 +254,7 @@ export default function EdgeDetailsPanel({
           <p className="text-xs uppercase tracking-[0.2em] text-gray-500">
             Connection
           </p>
-          <div className="mt-4 flex items-center gap-2 text-lg font-semibold">
+          <div className="mt-4 flex items-center gap-2 text-lg font-semibold flex-wrap">
             <span style={{ color: sourceColor }}>
               {sourceNode?.displayLabel || selectedEdge.source}
             </span>
@@ -253,17 +263,53 @@ export default function EdgeDetailsPanel({
               {targetNode?.displayLabel || selectedEdge.target}
             </span>
           </div>
-          {(sourceNode?.paperTitle && sourceNode.paperTitle !== sourceNode.displayLabel) ||
-          (targetNode?.paperTitle && targetNode.paperTitle !== targetNode.displayLabel) ? (
-            <div className="mt-3 space-y-1 text-xs text-gray-500">
-              {sourceNode?.paperTitle && sourceNode.paperTitle !== sourceNode.displayLabel ? (
-                <p>{sourceNode.displayLabel}: {sourceNode.paperTitle}</p>
-              ) : null}
-              {targetNode?.paperTitle && targetNode.paperTitle !== targetNode.displayLabel ? (
-                <p>{targetNode.displayLabel}: {targetNode.paperTitle}</p>
-              ) : null}
-            </div>
-          ) : null}
+
+          {/* Show actual paper titles for paper nodes, or source paper tags for topic nodes */}
+          <div className="mt-3 space-y-2">
+            {[sourceNode, targetNode].map((node) => {
+              if (!node) return null;
+              if (node.paperLabel) {
+                // It's a paper node — show full title
+                const title = node.paperTitle || node.displayLabel || node.id;
+                const color = node.colorHex || NODE_COLORS[node.type];
+                return (
+                  <div key={node.id} className="flex items-start gap-2">
+                    <span
+                      className="mt-0.5 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium shrink-0"
+                      style={{ color, borderColor: `${color}44`, backgroundColor: `${color}18` }}
+                    >
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" strokeWidth="2" />
+                      </svg>
+                      {node.displayLabel}
+                    </span>
+                    <span className="text-xs text-gray-400 leading-relaxed">{title}</span>
+                  </div>
+                );
+              }
+              // Topic node — find connected papers
+              const papers = getSourcePapers(nodes, edges, node.id);
+              if (papers.length === 0) return null;
+              return (
+                <div key={node.id} className="flex items-start gap-2 flex-wrap">
+                  <span className="text-xs text-gray-500 shrink-0 mt-0.5">{node.displayLabel || node.id} from:</span>
+                  {papers.map((paper) => {
+                    const color = paper.colorHex || NODE_COLORS[paper.type];
+                    return (
+                      <span
+                        key={paper.id}
+                        className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
+                        style={{ color, borderColor: `${color}44`, backgroundColor: `${color}18` }}
+                      >
+                        {paper.paperTitle || paper.displayLabel || paper.id}
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div>

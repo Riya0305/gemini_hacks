@@ -101,18 +101,19 @@ Return only a single valid JSON object. No markdown, no code fences, no commenta
 - Include: displayLabel (2-4 words), paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", etc.).
 
 ## Rules for topic nodes (critical for graph quality)
-- For each paper, extract 4-8 topic nodes representing its key subjects: methods used, technologies mentioned, core concepts, important applications, or notable authors.
+- For each paper, extract 5-8 topic nodes representing its key subjects: methods used, technologies mentioned, core concepts, important applications, or notable authors.
 - Topic nodes should be specific and meaningful (e.g. "Epigenetic Clocks", "GWAS", "Telomere Length") not vague (e.g. "Analysis", "Results", "Data").
-- If two papers discuss the same topic, they MUST share the same topic node (same id). This is how cross-paper connections form naturally. Actively look for shared topics across papers.
+- If two papers discuss the same topic, they MUST share the same topic node (same id). This is the primary mechanism for showing cross-paper connections — shared nodes act as bridges between paper mothers.
 - Topic nodes do NOT have paperLabel set — only paper nodes do.
 - Allowed types: technology, method, author, application, concept.
 
 ## Rules for edges (MAXIMIZE CONNECTIONS)
-- Connect each paper node to ALL of its topic nodes (e.g. paper → "uses" → method, paper → "studies" → concept). Every paper MUST have edges to every one of its topic nodes.
-- Also connect paper nodes directly to each other when they share methods, goals, domains, or findings (e.g. paper → "extends" → paper, paper → "shares methods with" → paper).
-- Connect topic nodes to each other when they are related (e.g. method → "enables" → application, concept → "builds on" → concept, technology → "implements" → method). These cross-topic edges create a rich, interconnected graph.
-- The graph should feel dense and interconnected, not sparse. Aim for at least 2-3x more edges than nodes.
-- relation must be a short verb phrase: "uses", "proposes", "studies", "applies", "extends", "introduces", "shares methods with", "supports", "contrasts with", "enables", "builds on", "implements", "complements".
+- Connect each paper node to ALL of its topic nodes. Every paper MUST have edges to every one of its topic nodes.
+- Shared topic nodes MUST connect to every paper that discusses them — this is what bridges the papers visually.
+- Also connect paper nodes directly to each other when they share methods, goals, domains, or findings.
+- Connect topic nodes to each other when they are related (method → "enables" → application, concept → "builds on" → concept). These cross-topic edges make the graph rich.
+- The graph should feel dense and interconnected. Aim for at least 3x more edges than nodes.
+- relation must be a short verb phrase: "uses", "proposes", "studies", "applies", "extends", "introduces", "shares methods with", "supports", "contrasts with", "enables", "builds on", "implements", "complements", "validates".
 - explanation must be concise and grounded in the paper content.
 - evidence must be a direct quote when available, otherwise a close grounded excerpt.
 - Edges must only connect existing node ids.
@@ -1360,18 +1361,32 @@ export async function extractGraphFromPdfs(files: File[]): Promise<GraphData> {
   const parts: GeminiPart[] = [
     {
       text: `
-Analyze the uploaded research papers and build a RICHLY CONNECTED knowledge graph with two layers:
-1. **Paper nodes** — one per uploaded PDF. Read the real paper title from the first page of each PDF and use it as the node id. Never use filenames or placeholders.
-2. **Topic nodes** — key concepts, methods, technologies, applications, and authors extracted from each paper (4-8 per paper).
+Analyze the uploaded research papers and build a hub-and-spoke knowledge graph with THREE layers:
 
-CRITICAL: The graph must be DENSE with connections. Follow these rules:
-- For each paper, extract 4-8 specific topic nodes and connect the paper to EVERY one of them.
-- If two papers discuss the same topic (e.g. both use "GWAS" or both study "Telomere Length"), use the SAME topic node id so the papers are connected through it. Actively look for shared topics.
-- Create direct paper-to-paper edges when papers share methods, goals, domains, or findings.
-- Connect topic nodes to each other when related (e.g. a method enables an application, a concept builds on another concept). These inter-topic edges are what make the graph rich and useful.
-- Aim for at least 2-3x more edges than nodes. A graph with 10 nodes should have 20-30 edges.
-- Topic nodes must be specific and grounded in the paper content, not generic terms like "Analysis" or "Results".
-- Each paper node must include: displayLabel, paperTitle, themeLabel, themeDescription, summary, evidence, and paperLabel ("Paper 1", "Paper 2", etc.).
+LAYER 1 — PAPER NODES (mother nodes, one per PDF)
+- Read the real paper title from the first page of each PDF. Use it as the node id exactly.
+- Never use filenames, "Paper 1", or placeholders as the node id.
+- Each paper node is a "mother" hub. Everything branches from it.
+
+LAYER 2 — KEY CONCEPT NODES (child nodes, 5-8 per paper)
+- For each paper, extract 5-8 specific, meaningful key concepts: core methods, technologies, findings, applications, or named frameworks from that paper.
+- Be specific: "Transformer Architecture", "Federated Learning", "Epigenetic Clock" — NOT "Analysis", "Results", "Method".
+- Connect EVERY concept back to its parent paper with a clear relation edge (paper → "introduces" / "uses" / "studies" / "proposes" → concept).
+- These are the spokes radiating from each mother node.
+
+LAYER 3 — CROSS-PAPER BRIDGES (shared concept nodes)
+- Actively look for concepts that appear in MORE THAN ONE paper. These MUST use the exact same node id so they become shared bridge nodes.
+- A shared concept node connects to BOTH paper mothers, visually bridging them.
+- Also add direct concept-to-concept edges when two concepts from different papers are related (e.g. one method enables another, one concept builds on another).
+- These bridges are the most important part — they show HOW the papers are intellectually connected.
+
+EDGE RULES:
+- Every paper must connect to every one of its concept children.
+- Every shared concept must connect to every paper that discusses it.
+- Add concept-to-concept edges freely when grounded in the content.
+- Aim for 3x more edges than nodes minimum.
+- relation must be a short verb phrase: "uses", "proposes", "studies", "applies", "extends", "introduces", "shares methods with", "supports", "contrasts with", "enables", "builds on", "implements", "complements", "validates".
+- Each paper node must include: displayLabel (2-4 words), paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", "Paper 2", etc.).
 - Topic nodes must NOT have paperLabel set.
 `.trim(),
     },
