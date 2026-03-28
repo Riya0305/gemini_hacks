@@ -53,11 +53,11 @@ export const EMPTY_GRAPH: GraphData = {
   edges: [],
 };
 
-// Maps each node type to its display color in the graph.
+// Maps each node type to neon accent colors (aligned with product mockups).
 export const NODE_COLORS: Record<GraphNodeType, string> = {
-  technology: "#22d3ee",
-  method: "#a78bfa",
-  author: "#fbbf24",
-  application: "#34d399",
-  concept: "#94a3b8",
+  technology: "#3b82f6",
+  method: "#06b6d4",
+  author: "#22c55e",
+  application: "#f97316",
+  concept: "#a855f7",
 };

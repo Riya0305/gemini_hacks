@@ -7,7 +7,13 @@ import type {
   LinkObject,
   NodeObject,
 } from "react-force-graph-2d";
-import { GraphData, GraphEdge, GraphNode, NODE_COLORS } from "@/lib/types";
+import {
+  GraphData,
+  GraphEdge,
+  GraphNode,
+  GraphNodeType,
+  NODE_COLORS,
+} from "@/lib/types";
 import EmptyState from "./EmptyState";
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
@@ -143,25 +149,92 @@ function wrapNodeLabel(label: string): string[] {
   return lines;
 }
 
-function drawRoundedRect(
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return `rgba(148, 163, 184, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function drawTypeIcon(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  width: number,
-  height: number,
-  radius: number
+  size: number,
+  nodeType: GraphNodeType | string
 ) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + width - radius, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-  ctx.lineTo(x + width, y + height - radius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  ctx.lineTo(x + radius, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = Math.max(0.75, size * 0.07);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  switch (nodeType) {
+    case "technology": {
+      const w = size * 0.85;
+      const h = size * 0.5;
+      ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.3, y - h * 0.08);
+      ctx.lineTo(x + w * 0.3, y - h * 0.08);
+      ctx.moveTo(x - w * 0.3, y + h * 0.12);
+      ctx.lineTo(x + w * 0.2, y + h * 0.12);
+      ctx.stroke();
+      break;
+    }
+    case "method": {
+      ctx.beginPath();
+      ctx.moveTo(x - size * 0.32, y + size * 0.22);
+      ctx.lineTo(x, y - size * 0.28);
+      ctx.lineTo(x + size * 0.32, y + size * 0.22);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y - size * 0.02, size * 0.2, 0, Math.PI * 2);
+      ctx.stroke();
+      break;
+    }
+    case "author": {
+      ctx.beginPath();
+      ctx.arc(x, y - size * 0.14, size * 0.16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y + size * 0.24, size * 0.3, Math.PI * 1.08, Math.PI * 1.92);
+      ctx.stroke();
+      break;
+    }
+    case "application": {
+      const w = size * 0.62;
+      ctx.strokeRect(x - w / 2, y - w / 2, w, w);
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.2, y - w * 0.08);
+      ctx.lineTo(x + w * 0.2, y - w * 0.08);
+      ctx.moveTo(x - w * 0.2, y + w * 0.12);
+      ctx.lineTo(x + w * 0.2, y + w * 0.12);
+      ctx.moveTo(x - w * 0.12, y - w * 0.22);
+      ctx.lineTo(x - w * 0.12, y + w * 0.22);
+      ctx.moveTo(x + w * 0.12, y - w * 0.22);
+      ctx.lineTo(x + w * 0.12, y + w * 0.22);
+      ctx.stroke();
+      break;
+    }
+    default: {
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3 - Math.PI / 2;
+        const px = x + Math.cos(a) * size * 0.32;
+        const py = y + Math.sin(a) * size * 0.32;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function buildLegendItems(nodes: GraphNode[]): LegendItem[] {
@@ -218,8 +291,49 @@ export default function GraphCanvas({
   const selectedNodeIdRef = useRef<string | null>(null);
   const activeDragNodeIdRef = useRef<string | null>(null);
   const selectedEdgeIdRef = useRef<string | null>(null);
+  const hubNodeIdRef = useRef<string | null>(null);
 
   const layoutKey = useMemo(() => buildLayoutKey(graphData), [graphData]);
+
+  const nodeById = useMemo(() => {
+    const map = new Map<string, GraphNode>();
+    graphData.nodes.forEach((node) => map.set(node.id, node));
+    return map;
+  }, [graphData.nodes]);
+
+  const hubNodeId = useMemo(() => {
+    if (graphData.nodes.length === 0) return null;
+    const degree = new Map<string, number>();
+    graphData.nodes.forEach((node) => degree.set(node.id, 0));
+    graphData.edges.forEach((edge) => {
+      if (degree.has(edge.source)) {
+        degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+      }
+      if (degree.has(edge.target)) {
+        degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+      }
+    });
+
+    let best: string | null = null;
+    let bestScore = -1;
+    for (const node of graphData.nodes) {
+      const d = degree.get(node.id) || 0;
+      const bonus =
+        node.type === "method" || node.type === "technology"
+          ? 4
+          : node.type === "concept"
+            ? 2
+            : 0;
+      const score = d * 2 + bonus;
+      if (score > bestScore) {
+        bestScore = score;
+        best = node.id;
+      }
+    }
+    return best;
+  }, [graphData]);
+
+  hubNodeIdRef.current = hubNodeId;
   const activePinnedLayout = useMemo(
     () => pinnedLayouts[layoutKey] || {},
     [layoutKey, pinnedLayouts]
@@ -526,129 +640,90 @@ export default function GraphCanvas({
   }, [layoutKey]);
 
   const nodeCanvasObject = useCallback(
-    (rawNode: NodeObject<GraphNode>, ctx: CanvasRenderingContext2D) => {
+    (
+      rawNode: NodeObject<GraphNode>,
+      ctx: CanvasRenderingContext2D,
+      globalScale = 1
+    ) => {
       const node = rawNode as ForceNode;
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const nodeId = String(node.id ?? "");
-      // read interaction state from refs to avoid re-creating this callback on hover
       const isSelected = selectedNodeIdRef.current === nodeId;
       const isHovered = hoveredNodeIdRef.current === nodeId;
       const isDragging = activeDragNodeIdRef.current === nodeId;
+      const isHub = hubNodeIdRef.current === nodeId;
       const isPaperNode = Boolean(node.paperLabel);
       const color = getNodeColor(node);
-      const labelLines = wrapNodeLabel(getNodeLabel(node));
+      const titleLines = wrapNodeLabel(getNodeLabel(node));
+      const typeLabel = (node.type || "concept").toUpperCase();
       const active = isHovered || isSelected || isDragging;
 
-      if (isPaperNode) {
-        // -- PAPER NODE: large colored circle, clearly distinguishable --
-        const r = 9 + (active ? 1.5 : 0);
+      const baseR = isPaperNode ? 11 : 7.5;
+      const r = (isHub ? baseR * 1.35 : baseR) + (active ? 1.2 : 0);
 
-        // outer glow ring
-        ctx.beginPath();
-        ctx.arc(x, y, r + 3, 0, 2 * Math.PI);
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = `${color}40`;
-        ctx.stroke();
+      // Outer neon ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, r + 2.8, 0, Math.PI * 2);
+      ctx.strokeStyle = hexToRgba(color, active ? 0.45 : 0.22);
+      ctx.lineWidth = 1.2;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = active ? 22 : 14;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
 
-        // strong glow
-        ctx.shadowColor = color;
-        ctx.shadowBlur = active ? 20 : 12;
+      // Glass fill
+      const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, 0, x, y, r);
+      g.addColorStop(0, hexToRgba(color, isHub ? 0.28 : 0.2));
+      g.addColorStop(0.55, hexToRgba("#0f172a", 0.55));
+      g.addColorStop(1, hexToRgba("#020617", 0.72));
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = g;
+      ctx.fill();
 
-        // filled circle with the paper's theme color
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = color;
-        ctx.fill();
+      // Thick accent border
+      ctx.lineWidth = isSelected ? 2.4 : active ? 2 : 1.65;
+      ctx.strokeStyle = isSelected ? "#ffffff" : hexToRgba(color, 0.95);
+      ctx.stroke();
+      ctx.restore();
+
+      // Icon (mockup: glyph at top inside disc)
+      const iconY = y - r * 0.52;
+      const iconS = r * 0.95;
+      drawTypeIcon(ctx, x, iconY, iconS, node.type || "concept");
+
+      // Title + type inside circle
+      const titleSize = Math.max(3.1, 3.8 / globalScale);
+      const typeSize = Math.max(2.35, 2.85 / globalScale);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `600 ${titleSize}px system-ui, sans-serif`;
+
+      const maxTitleW = r * 1.55;
+      let ty = y - r * 0.02;
+      titleLines.slice(0, 2).forEach((line) => {
+        let text = line;
+        while (text.length > 2 && ctx.measureText(text).width > maxTitleW) {
+          text = `${text.slice(0, -2)}…`;
+        }
+        ctx.fillStyle = "rgba(248, 250, 252, 0.96)";
+        ctx.shadowColor = "rgba(0,0,0,0.85)";
+        ctx.shadowBlur = 4;
+        ctx.fillText(text, x, ty);
         ctx.shadowBlur = 0;
+        ty += titleSize + 1.2;
+      });
 
-        // border
-        ctx.lineWidth = isSelected ? 2 : active ? 1.4 : 1;
-        ctx.strokeStyle = isSelected ? "#ffffff" : isDragging ? "#ffffff" : `${color}ee`;
-        ctx.stroke();
-
-        // white doc icon inside the circle
-        const iconW = r * 0.55;
-        const iconTop = y - iconW * 0.5;
-        for (let i = 0; i < 3; i++) {
-          const lY = iconTop + i * 2.6;
-          const lW = i === 2 ? iconW * 0.6 : iconW;
-          ctx.beginPath();
-          ctx.moveTo(x - lW / 2, lY);
-          ctx.lineTo(x + lW / 2, lY);
-          ctx.lineWidth = 1.2;
-          ctx.strokeStyle = "rgba(255,255,255,0.85)";
-          ctx.stroke();
-        }
-
-        // label below
-        const fontSize = 4.2 + (active ? 0.2 : 0);
-        const lineHeight = fontSize + 1.6;
-        ctx.font = `600 ${fontSize}px sans-serif`;
-        const maxTW = Math.max(...labelLines.map((l) => ctx.measureText(l).width));
-        const boxW = maxTW + 7;
-        const boxH = labelLines.length * lineHeight + 4.5;
-        const boxX = x - boxW / 2;
-        const boxY = y + r + 4;
-
-        drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 3);
-        ctx.fillStyle = "rgba(6, 12, 28, 0.92)";
-        ctx.fill();
-        ctx.lineWidth = active ? 0.7 : 0.45;
-        ctx.strokeStyle = isSelected ? "#67e8f9aa" : `${color}55`;
-        ctx.stroke();
-
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#e2e8f0";
-        labelLines.forEach((line, i) => {
-          ctx.fillText(line, x, boxY + 3 + lineHeight / 2 + i * lineHeight);
-        });
-      } else {
-        // -- TOPIC/CONCEPT NODE: smaller dot, these are the key connectors --
-        const r = 4 + (isHovered ? 0.5 : 0) + (isSelected ? 0.7 : 0) + (isDragging ? 0.4 : 0);
-
-        // glow
-        ctx.shadowColor = color;
-        ctx.shadowBlur = active ? 10 : 5;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        if (active) {
-          ctx.lineWidth = isSelected ? 1 : 0.7;
-          ctx.strokeStyle = isSelected ? "#d8f6ff" : isDragging ? "#ffffff" : `${color}bb`;
-          ctx.stroke();
-        }
-
-        // label
-        const fontSize = 3.6 + (active ? 0.2 : 0);
-        const lineHeight = fontSize + 1.4;
-        ctx.font = `500 ${fontSize}px sans-serif`;
-        const maxTW = Math.max(...labelLines.map((l) => ctx.measureText(l).width));
-        const boxW = maxTW + 6;
-        const boxH = labelLines.length * lineHeight + 4;
-        const boxX = x - boxW / 2;
-        const boxY = y + r + 3;
-
-        drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 2.5);
-        ctx.fillStyle = "rgba(5, 10, 24, 0.88)";
-        ctx.fill();
-        if (active) {
-          ctx.lineWidth = 0.5;
-          ctx.strokeStyle = isSelected ? "#67e8f9aa" : `${color}44`;
-          ctx.stroke();
-        }
-
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#cbd5e1";
-        labelLines.forEach((line, i) => {
-          ctx.fillText(line, x, boxY + 2.5 + lineHeight / 2 + i * lineHeight);
-        });
-      }
+      ctx.font = `650 ${typeSize}px system-ui, sans-serif`;
+      ctx.fillStyle = hexToRgba(color, 0.95);
+      ctx.shadowColor = "rgba(0,0,0,0.75)";
+      ctx.shadowBlur = 3;
+      const typeText =
+        typeLabel.length > 14 ? `${typeLabel.slice(0, 12)}…` : typeLabel;
+      ctx.fillText(typeText, x, y + r * 0.52);
+      ctx.shadowBlur = 0;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
@@ -676,6 +751,50 @@ export default function GraphCanvas({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
+  );
+
+  const linkCanvasObject = useCallback(
+    (
+      rawLink: LinkObject<GraphNode, GraphEdge>,
+      ctx: CanvasRenderingContext2D,
+      globalScale = 1
+    ) => {
+      const link = rawLink as ForceLink;
+      const tid = getEndpointId(link.target);
+      const sourceNode = resolveForceNode(link.source);
+      const targetNode = resolveForceNode(link.target);
+      if (!sourceNode || !targetNode || !tid) return;
+
+      const label = (link.relation || "").trim();
+      if (!label) return;
+
+      const mx = ((sourceNode.x ?? 0) + (targetNode.x ?? 0)) / 2;
+      const my = ((sourceNode.y ?? 0) + (targetNode.y ?? 0)) / 2;
+      const linkId = getLinkId(link);
+      const targetGraphNode = nodeById.get(tid);
+      const accent = targetGraphNode ? getNodeColor(targetGraphNode) : "#94a3b8";
+      const fontPx = Math.max(8.5, 10.5 / globalScale);
+
+      ctx.save();
+      ctx.font = `650 ${fontPx}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      let text = label;
+      const maxW = 80 / globalScale;
+      while (text.length > 2 && ctx.measureText(text).width > maxW) {
+        text = `${text.slice(0, -2)}…`;
+      }
+      ctx.lineWidth = 3.5 / globalScale;
+      ctx.strokeStyle = "rgba(5, 10, 24, 0.94)";
+      ctx.strokeText(text, mx, my);
+      ctx.fillStyle =
+        linkId === selectedEdgeIdRef.current
+          ? "#e0f2fe"
+          : hexToRgba(accent, hoveredLinkIdRef.current === linkId ? 1 : 0.88);
+      ctx.fillText(text, mx, my);
+      ctx.restore();
+    },
+    [nodeById]
   );
 
   if (graphData.nodes.length === 0) {
@@ -740,8 +859,12 @@ export default function GraphCanvas({
           nodeCanvasObject={nodeCanvasObject as never}
           nodePointerAreaPaint={((rawNode: NodeObject<GraphNode>, color: string, ctx: CanvasRenderingContext2D) => {
             const node = rawNode as ForceNode;
+            const id = String(node.id ?? "");
+            const isHub = hubNodeIdRef.current === id;
+            const isPaper = Boolean(node.paperLabel);
+            const hitR = isHub ? 22 : isPaper ? 17 : 14;
             ctx.beginPath();
-            ctx.arc(node.x ?? 0, node.y ?? 0, node.paperLabel ? 14 : 10, 0, 2 * Math.PI);
+            ctx.arc(node.x ?? 0, node.y ?? 0, hitR, 0, 2 * Math.PI);
             ctx.fillStyle = color;
             ctx.fill();
           }) as never}
@@ -750,17 +873,22 @@ export default function GraphCanvas({
           linkColor={((rawLink: LinkObject<GraphNode, GraphEdge>) => {
             const link = rawLink as ForceLink;
             const linkId = getLinkId(link);
-            if (linkId === selectedId) return "#67e8f9";
-            if (linkId === effectiveHoveredLinkId) return "#94a3b8";
-            return "#4b6a8a";
+            const tid = getEndpointId(link.target);
+            const targetNode = nodeById.get(tid);
+            const accent = targetNode ? getNodeColor(targetNode) : "#64748b";
+            if (linkId === selectedId) return "#38bdf8";
+            if (linkId === effectiveHoveredLinkId) return hexToRgba(accent, 0.88);
+            return hexToRgba(accent, 0.38);
           }) as never}
           linkWidth={((rawLink: LinkObject<GraphNode, GraphEdge>) => {
             const link = rawLink as ForceLink;
             const linkId = getLinkId(link);
-            if (linkId === selectedId) return 3;
-            if (linkId === effectiveHoveredLinkId) return 2.2;
-            return 1.4;
+            if (linkId === selectedId) return 3.2;
+            if (linkId === effectiveHoveredLinkId) return 2.5;
+            return 1.75;
           }) as never}
+          linkCanvasObject={linkCanvasObject as never}
+          linkCanvasObjectMode="after"
           linkCurvature={((rawLink: LinkObject<GraphNode, GraphEdge>) => {
             const link = rawLink as ForceLink;
             return getLinkId(link) === selectedId ? 0.06 : effectiveHoveredLinkId === getLinkId(link) ? 0.025 : 0;
@@ -800,6 +928,10 @@ export default function GraphCanvas({
           enablePanInteraction={true}
           showPointerCursor={((obj: ForceNode | ForceLink | undefined) => Boolean(obj)) as never}
         />
+
+        <p className="pointer-events-none absolute bottom-3 left-1/2 z-[1] max-w-[90%] -translate-x-1/2 text-center text-[10px] font-medium tracking-wide text-slate-500/95">
+          Click any node or connection to see why it matters
+        </p>
 
         <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-full border border-white/10 bg-gray-950/70 px-3 py-1.5 text-gray-300 shadow-[0_12px_24px_rgba(0,0,0,0.28)] backdrop-blur">
           <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-accent/85">

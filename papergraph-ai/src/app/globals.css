@@ -3,7 +3,7 @@
 
 /* Inline theme: dark CSS vars, accent colors, and fonts */
 @theme inline {
-  --color-background: #030712;
+  --color-background: #050a18;
   --color-foreground: #f3f4f6;
   --color-cyan-accent: #22d3ee;
   --color-violet-accent: #a78bfa;
@@ -28,10 +28,10 @@ body {
 
 .graph-canvas-aurora {
   background:
-    radial-gradient(circle at 12% 18%, rgba(34, 211, 238, 0.16), transparent 30%),
-    radial-gradient(circle at 82% 14%, rgba(167, 139, 250, 0.12), transparent 28%),
-    radial-gradient(circle at 78% 78%, rgba(251, 191, 36, 0.08), transparent 22%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.25), rgba(3, 7, 18, 0.08));
+    radial-gradient(circle at 14% 20%, rgba(59, 130, 246, 0.14), transparent 32%),
+    radial-gradient(circle at 86% 16%, rgba(168, 85, 247, 0.1), transparent 30%),
+    radial-gradient(circle at 72% 82%, rgba(249, 115, 22, 0.07), transparent 24%),
+    linear-gradient(180deg, rgba(5, 10, 24, 0.92), rgba(5, 10, 24, 0.55));
   animation: graphAurora 18s ease-in-out infinite alternate;
 }
 
