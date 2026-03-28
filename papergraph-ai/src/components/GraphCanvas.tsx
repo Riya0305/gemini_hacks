@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import dynamic from "next/dynamic";
 import type {
   ForceGraphMethods,
@@ -26,14 +33,26 @@ interface GraphCanvasProps {
 type ForceNode = NodeObject<GraphNode>;
 type ForceLink = LinkObject<GraphNode, GraphEdge> & GraphEdge;
 type ForceGraphHandle = ForceGraphMethods<GraphNode, GraphEdge>;
-type ManyBodyForce = { strength: (value: number) => ManyBodyForce };
-type LinkForceController = { distance: (value: number) => LinkForceController };
+type ManyBodyForce = {
+  strength: (value: number | ((node: ForceNode) => number)) => ManyBodyForce;
+};
+type LinkForceController = {
+  distance: (value: number | ((link: ForceLink) => number)) => LinkForceController;
+  strength?: (value: number | ((link: ForceLink) => number)) => LinkForceController;
+};
 type PinnedPosition = { x: number; y: number };
 type LegendItem = {
   colorHex: string;
   themeLabel: string;
   themeDescription: string;
   count: number;
+};
+type GraphMetrics = {
+  degreeById: Map<string, number>;
+  paperNeighborCountById: Map<string, number>;
+  topicNeighborCountById: Map<string, number>;
+  topicNeighborIdsById: Map<string, string[]>;
+  paperNeighborIdsById: Map<string, string[]>;
 };
 
 function truncateLegendDescription(value: string): string {
@@ -80,15 +99,220 @@ function buildLayoutKey(graphData: GraphData): string {
   return `${nodeSignature}__${edgeSignature}`;
 }
 
+function getAverageAngle(angles: number[]): number {
+  if (angles.length === 0) return 0;
+
+  const vector = angles.reduce(
+    (accumulator, angle) => {
+      return {
+        x: accumulator.x + Math.cos(angle),
+        y: accumulator.y + Math.sin(angle),
+      };
+    },
+    { x: 0, y: 0 }
+  );
+
+  return Math.atan2(vector.y, vector.x);
+}
+
+function buildGraphMetrics(graphData: GraphData): GraphMetrics {
+  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node] as const));
+  const degreeById = new Map<string, number>();
+  const paperNeighborCountById = new Map<string, number>();
+  const topicNeighborCountById = new Map<string, number>();
+  const topicNeighborIdsById = new Map<string, string[]>();
+  const paperNeighborIdsById = new Map<string, string[]>();
+
+  graphData.nodes.forEach((node) => {
+    degreeById.set(node.id, 0);
+    paperNeighborCountById.set(node.id, 0);
+    topicNeighborCountById.set(node.id, 0);
+    topicNeighborIdsById.set(node.id, []);
+    paperNeighborIdsById.set(node.id, []);
+  });
+
+  const registerNeighbor = (sourceId: string, targetId: string) => {
+    degreeById.set(sourceId, (degreeById.get(sourceId) ?? 0) + 1);
+    const targetNode = nodeById.get(targetId);
+    if (!targetNode) return;
+
+    if (targetNode.paperLabel) {
+      paperNeighborCountById.set(
+        sourceId,
+        (paperNeighborCountById.get(sourceId) ?? 0) + 1
+      );
+      paperNeighborIdsById.set(sourceId, [
+        ...(paperNeighborIdsById.get(sourceId) ?? []),
+        targetId,
+      ]);
+      return;
+    }
+
+    topicNeighborCountById.set(
+      sourceId,
+      (topicNeighborCountById.get(sourceId) ?? 0) + 1
+    );
+    topicNeighborIdsById.set(sourceId, [
+      ...(topicNeighborIdsById.get(sourceId) ?? []),
+      targetId,
+    ]);
+  };
+
+  graphData.edges.forEach((edge) => {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) return;
+    registerNeighbor(edge.source, edge.target);
+    registerNeighbor(edge.target, edge.source);
+  });
+
+  return {
+    degreeById,
+    paperNeighborCountById,
+    topicNeighborCountById,
+    topicNeighborIdsById,
+    paperNeighborIdsById,
+  };
+}
+
+function buildSeedPositions(
+  graphData: GraphData,
+  metrics: GraphMetrics
+): Record<string, PinnedPosition> {
+  const positions: Record<string, PinnedPosition> = {};
+  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node] as const));
+  const paperNodes = graphData.nodes.filter((node) => node.paperLabel);
+  const topicNodes = graphData.nodes.filter((node) => !node.paperLabel);
+
+  const paperAngles = new Map<string, number>();
+  paperNodes.forEach((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(paperNodes.length, 1) - Math.PI / 2;
+    paperAngles.set(node.id, angle);
+    positions[node.id] = {
+      x: Math.cos(angle) * 220,
+      y: Math.sin(angle) * 220,
+    };
+  });
+
+  const sharedTopicNodes = topicNodes
+    .filter((node) => (metrics.paperNeighborCountById.get(node.id) ?? 0) > 1)
+    .sort((left, right) => {
+      const rightScore =
+        (metrics.paperNeighborCountById.get(right.id) ?? 0) * 4 +
+        (metrics.degreeById.get(right.id) ?? 0);
+      const leftScore =
+        (metrics.paperNeighborCountById.get(left.id) ?? 0) * 4 +
+        (metrics.degreeById.get(left.id) ?? 0);
+      return rightScore - leftScore;
+    });
+
+  sharedTopicNodes.forEach((node, index) => {
+    const paperAnglesForNode = (metrics.paperNeighborIdsById.get(node.id) ?? [])
+      .map((paperId) => paperAngles.get(paperId))
+      .filter((angle): angle is number => typeof angle === "number");
+    const fallbackAngle =
+      (Math.PI * 2 * index) / Math.max(sharedTopicNodes.length, 1) - Math.PI / 2;
+    const angle = paperAnglesForNode.length > 0
+      ? getAverageAngle(paperAnglesForNode)
+      : fallbackAngle;
+
+    positions[node.id] = {
+      x: Math.cos(angle) * 72,
+      y: Math.sin(angle) * 72,
+    };
+  });
+
+  const perPaperTopicBuckets = new Map<string, GraphNode[]>();
+  topicNodes.forEach((node) => {
+    if (positions[node.id]) return;
+    const paperNeighbors = metrics.paperNeighborIdsById.get(node.id) ?? [];
+    if (paperNeighbors.length === 1) {
+      const paperId = paperNeighbors[0];
+      const bucket = perPaperTopicBuckets.get(paperId) ?? [];
+      bucket.push(node);
+      perPaperTopicBuckets.set(paperId, bucket);
+    }
+  });
+
+  perPaperTopicBuckets.forEach((nodes, paperId) => {
+    const anchorAngle = paperAngles.get(paperId) ?? 0;
+    const total = nodes.length;
+    nodes
+      .sort(
+        (left, right) =>
+          (metrics.degreeById.get(right.id) ?? 0) - (metrics.degreeById.get(left.id) ?? 0)
+      )
+      .forEach((node, index) => {
+        const offset = total === 1 ? 0 : ((index / (total - 1)) - 0.5) * 0.9;
+        const angle = anchorAngle + offset;
+        const radius = 138 + (index % 3) * 18;
+        positions[node.id] = {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        };
+      });
+  });
+
+  const remainingTopics = topicNodes.filter((node) => !positions[node.id]);
+  remainingTopics.forEach((node, index) => {
+    const neighborTopicAngles = (metrics.topicNeighborIdsById.get(node.id) ?? [])
+      .map((neighborId) => {
+        const neighborPosition = positions[neighborId];
+        return neighborPosition
+          ? Math.atan2(neighborPosition.y, neighborPosition.x)
+          : null;
+      })
+      .filter((angle): angle is number => angle !== null);
+    const fallbackAngle =
+      (Math.PI * 2 * index) / Math.max(remainingTopics.length, 1) - Math.PI / 2;
+    const angle =
+      neighborTopicAngles.length > 0
+        ? getAverageAngle(neighborTopicAngles)
+        : fallbackAngle;
+
+    positions[node.id] = {
+      x: Math.cos(angle) * 124,
+      y: Math.sin(angle) * 124,
+    };
+  });
+
+  // Slightly pull papers toward their attached topic cloud so the orbit feels less rigid.
+  paperNodes.forEach((node) => {
+    const topicAngles = (metrics.topicNeighborIdsById.get(node.id) ?? [])
+      .map((topicId) => {
+        const topicNode = nodeById.get(topicId);
+        if (!topicNode || topicNode.paperLabel) return null;
+        const position = positions[topicId];
+        return position ? Math.atan2(position.y, position.x) : null;
+      })
+      .filter((angle): angle is number => angle !== null);
+    if (topicAngles.length === 0) return;
+
+    const angle = getAverageAngle(topicAngles);
+    positions[node.id] = {
+      x: Math.cos(angle) * 210,
+      y: Math.sin(angle) * 210,
+    };
+  });
+
+  return positions;
+}
+
 function buildForceData(
   graphData: GraphData,
-  pinnedLayout: Record<string, PinnedPosition> = {}
+  pinnedLayout: Record<string, PinnedPosition> = {},
+  metrics?: GraphMetrics
 ): { nodes: ForceNode[]; links: ForceLink[] } {
+  const seededPositions = metrics ? buildSeedPositions(graphData, metrics) : {};
+
   return {
     nodes: graphData.nodes.map((node) => {
       const pinned = pinnedLayout[node.id];
-      return pinned
-        ? ({ ...node, x: pinned.x, y: pinned.y, fx: pinned.x, fy: pinned.y } as ForceNode)
+      if (pinned) {
+        return { ...node, x: pinned.x, y: pinned.y, fx: pinned.x, fy: pinned.y } as ForceNode;
+      }
+
+      const seeded = seededPositions[node.id];
+      return seeded
+        ? ({ ...node, x: seeded.x, y: seeded.y } as ForceNode)
         : ({ ...node } as ForceNode);
     }),
     links: graphData.edges.map((edge) => ({ ...edge })) as ForceLink[],
@@ -205,7 +429,9 @@ export default function GraphCanvas({
   const draggingNodeIdRef = useRef<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [isLegendExpanded, setIsLegendExpanded] = useState(false);
-  const [pinnedLayouts, setPinnedLayouts] = useState<Record<string, Record<string, PinnedPosition>>>({});
+  const [pinnedLayouts, setPinnedLayouts] = useState<Record<string, Record<string, PinnedPosition>>>(
+    {}
+  );
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null);
@@ -224,6 +450,11 @@ export default function GraphCanvas({
     () => pinnedLayouts[layoutKey] || {},
     [layoutKey, pinnedLayouts]
   );
+  const nodeById = useMemo(
+    () => new Map(graphData.nodes.map((node) => [node.id, node] as const)),
+    [graphData.nodes]
+  );
+  const graphMetrics = useMemo(() => buildGraphMetrics(graphData), [graphData]);
 
   useEffect(() => {
     if (!viewportRef.current) return;
@@ -274,22 +505,64 @@ export default function GraphCanvas({
 
       const nodeCount = graphData.nodes.length;
       const linkCount = graphData.edges.length;
-      const linkDistance = Math.min(
-        180,
-        Math.max(60, 70 + Math.sqrt(nodeCount) * 8 - Math.min(linkCount, 40) * 0.6)
+      const baseDistance = Math.min(
+        148,
+        Math.max(52, 58 + Math.sqrt(nodeCount) * 5 - Math.min(linkCount, 60) * 0.45)
       );
-      const chargeStrength = -Math.min(
-        500,
-        Math.max(180, 200 + nodeCount * 6 - Math.min(linkCount, nodeCount * 2) * 1.5)
-      );
+      const degreeById = graphMetrics.degreeById;
+      const paperNeighborCountById = graphMetrics.paperNeighborCountById;
 
-      (graph.d3Force("link") as LinkForceController | undefined)?.distance?.(linkDistance);
-      (graph.d3Force("charge") as ManyBodyForce | undefined)?.strength?.(chargeStrength);
+      (graph.d3Force("link") as LinkForceController | undefined)?.distance?.(
+        (rawLink: ForceLink) => {
+          const sourceId = getEndpointId(rawLink.source);
+          const targetId = getEndpointId(rawLink.target);
+          const sourceNode = nodeById.get(sourceId);
+          const targetNode = nodeById.get(targetId);
+          const sourcePaper = Boolean(sourceNode?.paperLabel);
+          const targetPaper = Boolean(targetNode?.paperLabel);
+          const sharedHub =
+            (paperNeighborCountById.get(sourceId) ?? 0) > 1 ||
+            (paperNeighborCountById.get(targetId) ?? 0) > 1;
+
+          if (sourcePaper && targetPaper) return baseDistance + 20;
+          if (sourcePaper || targetPaper) return sharedHub ? baseDistance - 18 : baseDistance - 10;
+          return sharedHub ? baseDistance - 24 : baseDistance - 8;
+        }
+      );
+      (graph.d3Force("link") as LinkForceController | undefined)?.strength?.(
+        (rawLink: ForceLink) => {
+          const sourceId = getEndpointId(rawLink.source);
+          const targetId = getEndpointId(rawLink.target);
+          const sourceNode = nodeById.get(sourceId);
+          const targetNode = nodeById.get(targetId);
+          if (sourceNode?.paperLabel && targetNode?.paperLabel) return 0.22;
+          if (sourceNode?.paperLabel || targetNode?.paperLabel) return 0.38;
+          return 0.28;
+        }
+      );
+      (graph.d3Force("charge") as ManyBodyForce | undefined)?.strength?.(
+        (rawNode: ForceNode) => {
+          const nodeId = String(rawNode.id ?? "");
+          const node = nodeById.get(nodeId);
+          const degree = degreeById.get(nodeId) ?? 0;
+          const sharedHub = (paperNeighborCountById.get(nodeId) ?? 0) > 1;
+
+          if (node?.paperLabel) {
+            return -120 - Math.min(degree * 8, 48);
+          }
+
+          if (sharedHub) {
+            return -52 - Math.min(degree * 4, 18);
+          }
+
+          return -74 - Math.min(degree * 5, 28);
+        }
+      );
       graph.d3ReheatSimulation();
     }, 120);
 
     return () => window.clearTimeout(timeoutId);
-  }, [graphData.edges.length, graphData.nodes.length, layoutRevision]);
+  }, [graphData, graphMetrics, layoutRevision, nodeById]);
 
   const pinNodePosition = useCallback(
     (nodeId: string, x: number, y: number, syncState = false) => {
@@ -312,17 +585,9 @@ export default function GraphCanvas({
     [layoutKey]
   );
 
-  // only rebuild force data when the graph itself changes or on layout remix,
-  // NOT on every pinned position update — that causes re-render loops / zoom glitches
-  const initialPinnedRef = useRef<Record<string, PinnedPosition>>({});
-  useEffect(() => {
-    initialPinnedRef.current = pinnedLayoutsRef.current[layoutKey] || {};
-  }, [layoutKey, layoutRevision]);
-
   const forceData = useMemo(
-    () => buildForceData(graphData, initialPinnedRef.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graphData, layoutKey, layoutRevision]
+    () => buildForceData(graphData, activePinnedLayout, graphMetrics),
+    [activePinnedLayout, graphData, graphMetrics]
   );
 
   const legendItems = useMemo(() => buildLegendItems(graphData.nodes), [graphData.nodes]);
@@ -347,12 +612,19 @@ export default function GraphCanvas({
   const effectiveHoveredLinkId = hoveredLink ? hoveredLinkId : null;
   const effectiveActiveDragNodeId = isDraggingNode && activeDragNode ? activeDragNodeId : null;
 
-  // keep refs in sync so canvas paint reads current state without deps
-  hoveredNodeIdRef.current = effectiveHoveredNodeId;
-  hoveredLinkIdRef.current = effectiveHoveredLinkId;
-  selectedNodeIdRef.current = selectedNodeId;
-  activeDragNodeIdRef.current = effectiveActiveDragNodeId;
-  selectedEdgeIdRef.current = selectedId;
+  useLayoutEffect(() => {
+    hoveredNodeIdRef.current = effectiveHoveredNodeId;
+    hoveredLinkIdRef.current = effectiveHoveredLinkId;
+    selectedNodeIdRef.current = selectedNodeId;
+    activeDragNodeIdRef.current = effectiveActiveDragNodeId;
+    selectedEdgeIdRef.current = selectedId;
+  }, [
+    effectiveActiveDragNodeId,
+    effectiveHoveredLinkId,
+    effectiveHoveredNodeId,
+    selectedId,
+    selectedNodeId,
+  ]);
   const interactionLabel = effectiveActiveDragNodeId && activeDragNode
     ? `Dragging ${getNodeLabel(activeDragNode)}`
     : hoveredNode
@@ -459,52 +731,6 @@ export default function GraphCanvas({
     },
     [pinNodePosition]
   );
-
-  const handleEngineStop = useCallback(() => {
-    const graph = graphRef.current;
-    if (!graph) return;
-
-    const nextPinnedLayout = { ...(pinnedLayoutsRef.current[layoutKey] || {}) };
-    let changed = false;
-
-    forceData.nodes.forEach((rawNode) => {
-      const node = rawNode as ForceNode;
-      const id = String(node.id ?? "");
-      const x = node.x;
-      const y = node.y;
-
-      if (
-        !id ||
-        typeof x !== "number" ||
-        typeof y !== "number" ||
-        !Number.isFinite(x) ||
-        !Number.isFinite(y)
-      ) {
-        return;
-      }
-
-      const prev = nextPinnedLayout[id];
-      if (prev && Math.abs(prev.x - x) < 0.5 && Math.abs(prev.y - y) < 0.5) {
-        return;
-      }
-
-      node.fx = x;
-      node.fy = y;
-      nextPinnedLayout[id] = { x, y };
-      changed = true;
-    });
-
-    if (!changed) return;
-
-    pinnedLayoutsRef.current = {
-      ...pinnedLayoutsRef.current,
-      [layoutKey]: nextPinnedLayout,
-    };
-    setPinnedLayouts((previous) => ({
-      ...previous,
-      [layoutKey]: nextPinnedLayout,
-    }));
-  }, [forceData.nodes, layoutKey]);
 
   const handleZoomToFit = useCallback(() => {
     graphRef.current?.zoomToFit(450, 112);
@@ -650,7 +876,6 @@ export default function GraphCanvas({
         });
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
@@ -674,7 +899,6 @@ export default function GraphCanvas({
       ctx.strokeStyle = color;
       ctx.stroke();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
@@ -790,7 +1014,6 @@ export default function GraphCanvas({
             setHoveredNodeId(null);
             setHoveredLinkId(null);
           }}
-          onEngineStop={handleEngineStop}
           enableNodeDrag={true}
           minZoom={0.45}
           maxZoom={4}
@@ -900,3 +1123,4 @@ export default function GraphCanvas({
     </div>
   );
 }
+

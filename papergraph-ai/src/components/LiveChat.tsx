@@ -211,7 +211,7 @@ export default function LiveChat({
 
   // ─── handle incoming server messages ──────────────────────
 
-  const handleServerMessageRef = useRef((_msg: LiveServerMessage) => {});
+  const handleServerMessageRef = useRef<(msg: LiveServerMessage) => void>(() => {});
   handleServerMessageRef.current = (msg: LiveServerMessage) => {
     const update = msg.sessionResumptionUpdate;
     if (update?.resumable && update.newHandle) sessionHandleRef.current = update.newHandle;
