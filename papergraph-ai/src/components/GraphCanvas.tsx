@@ -534,19 +534,34 @@ export default function GraphCanvas({
   const graphMetrics = useMemo(() => buildGraphMetrics(graphData), [graphData]);
 
   useEffect(() => {
-    if (!viewportRef.current) return;
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const applySize = (width: number, height: number) => {
+      const w = Math.max(1, Math.floor(width));
+      const h = Math.max(1, Math.floor(height));
+      setDimensions((prev) =>
+        prev.width === w && prev.height === h ? prev : { width: w, height: h }
+      );
+    };
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-
       const { width, height } = entry.contentRect;
-      setDimensions({ width, height });
+      applySize(width, height);
     });
 
-    observer.observe(viewportRef.current);
+    observer.observe(el);
+    // Re-measure when the graph first appears (empty → data): ref stays on one node now,
+    // but layout can settle one frame late; also fixes stale observer on a replaced element.
+    requestAnimationFrame(() => {
+      const r = el.getBoundingClientRect();
+      applySize(r.width, r.height);
+    });
+
     return () => observer.disconnect();
-  }, []);
+  }, [graphData.nodes.length]);
 
   useEffect(() => {
     const nodeIds = new Set(graphData.nodes.map((node) => node.id));
@@ -1038,40 +1053,6 @@ export default function GraphCanvas({
     [nodeById]
   );
 
-  if (graphData.nodes.length === 0) {
-    return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-gray-800/80 bg-gray-950/90 shadow-[0_18px_60px_rgba(0,0,0,0.38)]">
-        <div className="border-b border-gray-800/80 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-accent/90">
-            4. Explore
-          </p>
-          <h2 className="mt-2 text-lg font-semibold text-gray-100">
-            Interactive Knowledge Graph
-          </h2>
-        </div>
-
-        <div ref={viewportRef} className="min-h-0 flex-1 bg-background">
-          <EmptyState
-            message={emptyMessage}
-            icon={
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5">
-                <circle cx="12" cy="12" r="3" />
-                <circle cx="4" cy="6" r="2" />
-                <circle cx="20" cy="6" r="2" />
-                <circle cx="4" cy="18" r="2" />
-                <circle cx="20" cy="18" r="2" />
-                <line x1="6" y1="6" x2="9.5" y2="10.5" />
-                <line x1="18" y1="6" x2="14.5" y2="10.5" />
-                <line x1="6" y1="18" x2="9.5" y2="13.5" />
-                <line x1="18" y1="18" x2="14.5" y2="13.5" />
-              </svg>
-            }
-          />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-gray-800/80 bg-gray-950/90 shadow-[0_18px_60px_rgba(0,0,0,0.38)]">
       <div className="flex items-center justify-between gap-3 border-b border-gray-800/80 px-5 py-4">
@@ -1089,6 +1070,25 @@ export default function GraphCanvas({
       </div>
 
       <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-background">
+        {graphData.nodes.length === 0 ? (
+          <EmptyState
+            message={emptyMessage}
+            icon={
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5">
+                <circle cx="12" cy="12" r="3" />
+                <circle cx="4" cy="6" r="2" />
+                <circle cx="20" cy="6" r="2" />
+                <circle cx="4" cy="18" r="2" />
+                <circle cx="20" cy="18" r="2" />
+                <line x1="6" y1="6" x2="9.5" y2="10.5" />
+                <line x1="18" y1="6" x2="14.5" y2="10.5" />
+                <line x1="6" y1="18" x2="9.5" y2="13.5" />
+                <line x1="18" y1="18" x2="14.5" y2="13.5" />
+              </svg>
+            }
+          />
+        ) : (
+          <>
         <div className="graph-canvas-aurora pointer-events-none absolute inset-0" />
         <div className="graph-canvas-grid pointer-events-none absolute inset-0 opacity-50" />
         <ForceGraph2D
@@ -1276,6 +1276,8 @@ export default function GraphCanvas({
             </div>
           </div>
         ) : null}
+          </>
+        )}
       </div>
     </div>
   );
