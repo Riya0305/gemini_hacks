@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, DragEvent, useRef } from "react";
+import { isLikelyPdfFile } from "@/lib/pdfMime";
 import LoadingState from "./LoadingState";
 
 // Props for the left upload sidebar that handles PDF intake.
@@ -41,14 +42,7 @@ export default function UploadPanel({
     (e: DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
-      const files = Array.from(e.dataTransfer.files).filter((f) => {
-        const n = f.name.toLowerCase();
-        return (
-          f.type === "application/pdf" ||
-          n.endsWith(".pdf") ||
-          (f.type === "application/octet-stream" && n.endsWith(".pdf"))
-        );
-      });
+      const files = Array.from(e.dataTransfer.files).filter((f) => isLikelyPdfFile(f));
       if (files.length > 0) onFilesAdded(files);
     },
     [onFilesAdded]
@@ -68,14 +62,7 @@ export default function UploadPanel({
   // Handles manual file selection and resets the input afterward.
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files || []).filter((f) => {
-        const n = f.name.toLowerCase();
-        return (
-          f.type === "application/pdf" ||
-          n.endsWith(".pdf") ||
-          (f.type === "application/octet-stream" && n.endsWith(".pdf"))
-        );
-      });
+      const files = Array.from(e.target.files || []).filter((f) => isLikelyPdfFile(f));
       if (files.length > 0) onFilesAdded(files);
       if (inputRef.current) inputRef.current.value = "";
     },

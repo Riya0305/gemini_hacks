@@ -3,12 +3,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AskResponse, EMPTY_GRAPH, GraphData, GraphEdge, GraphNode } from "@/lib/types";
-import Header from "@/components/Header";
-import UploadPanel from "@/components/UploadPanel";
-import GraphCanvas from "@/components/GraphCanvas";
 import EdgeDetailsPanel from "@/components/EdgeDetailsPanel";
-import LiveChat from "@/components/LiveChat";
+import GraphCanvas from "@/components/GraphCanvas";
+import Header from "@/components/Header";
 import HistoryPanel from "@/components/HistoryPanel";
+import LiveChat from "@/components/LiveChat";
+import UploadPanel from "@/components/UploadPanel";
 import WorkflowOverview from "@/components/WorkflowOverview";
 
 type GraphViewTab = "current" | "history";

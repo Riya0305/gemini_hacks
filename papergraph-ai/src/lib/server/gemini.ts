@@ -1,3 +1,4 @@
+import { isLikelyPdfFile } from "@/lib/pdfMime";
 import {
   AskResponse,
   GraphData,
@@ -149,6 +150,7 @@ Return only a single valid JSON object. No markdown, no code fences, no commenta
 - **Topic nodes**: key concepts, methods, technologies, applications, or authors extracted FROM the papers. These are the most important part of the graph — they show what each paper is about and create meaningful connections between papers.
 
 ## Rules for paper nodes
+- The product UI colors every node by its source paper: Paper 1 uses the first accent, Paper 2 the second, etc. themeLabel / themeDescription are optional metadata only (not used for colors).
 - Include exactly one paper-title node per uploaded PDF.
 - Set the node id to the extracted paper title from the PDF content (first-page title).
 - Never use filenames, author-year citations, or placeholders as paper node ids.
@@ -250,6 +252,7 @@ type GeminiResponse = {
         text?: string;
       }>;
     };
+    finishReason?: string;
   }>;
   promptFeedback?: {
     blockReason?: string;
@@ -387,15 +390,15 @@ export class RouteError extends Error {
 }
 
 function getApiKey(): string {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  const trimmed = (process.env.GEMINI_API_KEY || "").trim();
+  if (!trimmed) {
     throw new RouteError(
       500,
       "GEMINI_API_KEY is not configured. Add it to your local environment before uploading papers."
     );
   }
 
-  return apiKey;
+  return trimmed;
 }
 
 function cleanText(value: unknown): string {
@@ -1465,7 +1468,8 @@ function normalizeNodeType(value: unknown): GraphNodeType {
 }
 
 function extractText(response: GeminiResponse): string {
-  const text = response.candidates?.[0]?.content?.parts
+  const candidate = response.candidates?.[0];
+  const text = candidate?.content?.parts
     ?.map((part) => part.text ?? "")
     .join("")
     .trim();
@@ -1476,6 +1480,14 @@ function extractText(response: GeminiResponse): string {
     throw new RouteError(
       502,
       `Gemini blocked the request: ${response.promptFeedback.blockReason}.`
+    );
+  }
+
+  const fr = candidate?.finishReason;
+  if (fr && fr !== "STOP" && fr !== "FINISH_REASON_UNSPECIFIED") {
+    throw new RouteError(
+      502,
+      `Gemini returned no text (finishReason: ${fr}). Try fewer or shorter PDFs, or a different GEMINI_MODEL.`
     );
   }
 
@@ -2080,9 +2092,10 @@ async function callGeminiOnce(
   const payload = (await response.json().catch(() => null)) as GeminiResponse | null;
 
   if (!response.ok) {
+    const detail = payload?.error?.message || response.statusText || "Gemini request failed.";
     throw new RouteError(
       response.status,
-      payload?.error?.message || "Gemini request failed."
+      `[${model}] ${detail}`
     );
   }
 
@@ -2134,13 +2147,7 @@ function validatePdfFiles(files: File[]): void {
   }
 
   for (const file of files) {
-    const name = file.name.toLowerCase();
-    const isPdf =
-      file.type === "application/pdf" ||
-      name.endsWith(".pdf") ||
-      (file.type === "application/octet-stream" && name.endsWith(".pdf")) ||
-      (file.type === "" && name.endsWith(".pdf"));
-    if (!isPdf) {
+    if (!isLikelyPdfFile(file)) {
       throw new RouteError(400, `${file.name} is not a PDF.`);
     }
   }
@@ -2192,7 +2199,7 @@ async function extractPaperAnalyses(
           ],
         },
       ],
-      generationConfig: withThinkingConfig(
+      generationConfig: buildGenerationConfig(
         {
           temperature: 0,
           maxOutputTokens: 8192,
@@ -2254,17 +2261,55 @@ function getModelCandidates(): string[] {
 
 function shouldRetryGeminiWithNextModel(error: unknown): boolean {
   if (!(error instanceof RouteError)) return false;
-  if (error.status === 404) return true;
+  if (error.status === 404 || error.status === 429 || error.status === 503) return true;
   if (error.status === 400) {
     const m = error.message.toLowerCase();
     return (
       m.includes("not found") ||
       m.includes("invalid model") ||
       m.includes("was not found") ||
-      m.includes("does not exist")
+      m.includes("does not exist") ||
+      m.includes("is not found") ||
+      m.includes("unsupported") && m.includes("model")
     );
   }
   return false;
+}
+
+/**
+ * Some keys / API revisions reject responseSchema; retry once without it (still JSON via responseMimeType or free-form parse).
+ */
+async function callGeminiForGraphJson(requestBody: object): Promise<GeminiResponse> {
+  try {
+    return await callGemini(requestBody);
+  } catch (error) {
+    if (!(error instanceof RouteError) || error.status !== 400) {
+      throw error;
+    }
+    const msg = error.message.toLowerCase();
+    const schemaLikely =
+      msg.includes("schema") ||
+      msg.includes("response_schema") ||
+      (msg.includes("json") && msg.includes("invalid")) ||
+      msg.includes("responsemime") ||
+      msg.includes("response_mime") ||
+      (msg.includes("unknown name") && msg.includes("response"));
+    if (!schemaLikely) throw error;
+
+    console.warn("[gemini] Retrying graph request without responseSchema…");
+    let cloned: { generationConfig?: Record<string, unknown> };
+    try {
+      cloned = structuredClone(requestBody) as { generationConfig?: Record<string, unknown> };
+    } catch {
+      cloned = JSON.parse(JSON.stringify(requestBody)) as {
+        generationConfig?: Record<string, unknown>;
+      };
+    }
+    if (cloned.generationConfig && "responseSchema" in cloned.generationConfig) {
+      delete cloned.generationConfig.responseSchema;
+    }
+    return await callGemini(cloned);
+  }
 }
 
 
@@ -2274,7 +2319,7 @@ async function repairGraphJson(
 ): Promise<unknown> {
   const titleAnchors = buildPaperAnchorText(paperAnalyses);
 
-  const response = await callGemini({
+  const response = await callGeminiForGraphJson({
     systemInstruction: {
       parts: [{ text: GRAPH_REPAIR_SYSTEM_PROMPT }],
     },
@@ -2337,7 +2382,7 @@ CRITICAL: The graph must be DENSE with connections. Follow these rules:
     ...fileParts,
   ];
 
-  const response = await callGemini({
+  const response = await callGeminiForGraphJson({
     systemInstruction: {
       parts: [{ text: EXTRACT_SYSTEM_PROMPT }],
     },

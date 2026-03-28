@@ -69,6 +69,12 @@ Open:
 http://localhost:3000
 ```
 
+### Troubleshooting extract
+
+- If analysis fails, read the message under **Upload** and the server log. Gemini errors include the model id in brackets, e.g. `[gemini-3-flash-preview] …`.
+- Keep **Gemini 3 Flash** IDs only for `GEMINI_MODEL` / `GEMINI_MODEL_FALLBACKS`. Leave `GEMINI_THINKING` unset unless your model supports `thinkingConfig` (otherwise you may get 400s).
+- On some API revisions, structured JSON schema is rejected: the server **retries once without `responseSchema`** before surfacing a hard failure.
+
 Optional backend:
 
 ```powershell
@@ -78,7 +84,7 @@ python -m uvicorn backend.main:app --reload --port 8000
 
 ## Export graph image
 
-With a graph visible, use **Save JPEG** on the graph panel to download a `.jpg` snapshot of the workspace (uses `html2canvas`).
+With a graph visible, use **Save JPEG** on the graph panel to download a `.jpg`. The app tries **html2canvas** on the graph viewport first (full panel); if that fails (e.g. unsupported CSS color functions), it falls back to exporting the **ForceGraph2D canvas** only.
 
 ## Current Workflow
 
@@ -136,7 +142,7 @@ The parsing pipeline in `src/lib/server/gemini.ts` currently works like this:
 6. Rebuild missing paper nodes if needed.
 7. Derive paper analyses from the normalized graph.
 8. Backfill missing paper-to-paper edges from shared themes and shared keywords.
-9. Apply theme colors to paper nodes and inherited colors to topic nodes.
+9. Apply paper-index colors to nodes for the legend.
 
 This is the current code path. Older notes about a separate title-analysis stage are no longer the authoritative description.
 

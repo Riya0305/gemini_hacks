@@ -14,13 +14,8 @@ import type {
   LinkObject,
   NodeObject,
 } from "react-force-graph-2d";
-import {
-  GraphData,
-  GraphEdge,
-  GraphNode,
-  GraphNodeType,
-  NODE_COLORS,
-} from "@/lib/types";
+import { buildPaperLegendEntries, getNodePaperColor } from "@/lib/graphPaperColors";
+import { GraphData, GraphEdge, GraphNode, GraphNodeType } from "@/lib/types";
 import EmptyState from "./EmptyState";
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
@@ -325,10 +320,6 @@ function buildForceData(
   };
 }
 
-function getNodeColor(node: GraphNode): string {
-  return node.colorHex || NODE_COLORS[node.type] || "#94a3b8";
-}
-
 function getNodeLabel(node: GraphNode): string {
   return node.displayLabel || node.paperTitle || node.id;
 }
@@ -461,33 +452,6 @@ function drawTypeIcon(
   ctx.restore();
 }
 
-function buildLegendItems(nodes: GraphNode[]): LegendItem[] {
-  const legendMap = new Map<string, LegendItem>();
-
-  for (const node of nodes) {
-    if (!node.paperLabel || !node.themeLabel || !node.colorHex) continue;
-    const key = `${node.themeLabel.toLowerCase()}::${node.colorHex}`;
-    const existing = legendMap.get(key);
-
-    if (existing) {
-      existing.count += 1;
-      continue;
-    }
-
-    legendMap.set(key, {
-      colorHex: node.colorHex,
-      themeLabel: node.themeLabel,
-      themeDescription:
-        node.themeDescription || `${node.themeLabel} papers share a common research focus.`,
-      count: 1,
-    });
-  }
-
-  return Array.from(legendMap.values()).sort((left, right) =>
-    left.themeLabel.localeCompare(right.themeLabel)
-  );
-}
-
 export default function GraphCanvas({
   graphData,
   selectedEdge,
@@ -498,6 +462,8 @@ export default function GraphCanvas({
 }: GraphCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphHandle | undefined>(undefined);
+  const graphDataRef = useRef(graphData);
+  graphDataRef.current = graphData;
   const pinnedLayoutsRef = useRef<Record<string, Record<string, PinnedPosition>>>({});
   const draggingNodeIdRef = useRef<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -564,10 +530,6 @@ export default function GraphCanvas({
   const activePinnedLayout = useMemo(
     () => pinnedLayouts[layoutKey] || {},
     [layoutKey, pinnedLayouts]
-  );
-  const nodeById = useMemo(
-    () => new Map(graphData.nodes.map((node) => [node.id, node] as const)),
-    [graphData.nodes]
   );
   const graphMetrics = useMemo(() => buildGraphMetrics(graphData), [graphData]);
 
@@ -705,12 +667,15 @@ export default function GraphCanvas({
     [activePinnedLayout, graphData, graphMetrics]
   );
 
-  const legendItems = useMemo(() => buildLegendItems(graphData.nodes), [graphData.nodes]);
+  const paperLegendItems = useMemo(
+    () => buildPaperLegendEntries(graphData.nodes),
+    [graphData.nodes]
+  );
   const selectedId = selectedEdge
     ? `${selectedEdge.source}::${selectedEdge.target}::${selectedEdge.relation}`
     : null;
   const selectedNodeId = selectedNode?.id ?? null;
-  const compactLegendItems = legendItems.slice(0, 3);
+  const compactPaperLegendItems = paperLegendItems.slice(0, 3);
   const hoveredNode = hoveredNodeId
     ? graphData.nodes.find((node) => node.id === hoveredNodeId) ?? null
     : null;
@@ -871,17 +836,48 @@ export default function GraphCanvas({
     if (!el || graphData.nodes.length === 0) return;
     setExportBusy(true);
     try {
-      const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(el, {
-        backgroundColor: "#050a18",
-        scale: 2,
-        useCORS: true,
-        logging: false,
-      });
-      const link = document.createElement("a");
-      link.download = `papergraph-${Date.now()}.jpg`;
-      link.href = canvas.toDataURL("image/jpeg", 0.92);
-      link.click();
+      const downloadJpeg = (canvas: HTMLCanvasElement) => {
+        const link = document.createElement("a");
+        link.download = `papergraph-${Date.now()}.jpg`;
+        link.href = canvas.toDataURL("image/jpeg", 0.92);
+        link.click();
+      };
+
+      try {
+        const { default: html2canvas } = await import("html2canvas");
+        const shot = await html2canvas(el, {
+          backgroundColor: "#050a18",
+          scale: 2,
+          useCORS: true,
+          logging: false,
+        });
+        downloadJpeg(shot);
+        return;
+      } catch (domErr) {
+        console.warn("[GraphCanvas] html2canvas export failed, using graph canvas", domErr);
+      }
+
+      const canvases = Array.from(el.querySelectorAll("canvas"));
+      const graphCanvas = canvases.reduce<HTMLCanvasElement | null>((best, c) => {
+        const area = c.width * c.height;
+        if (!best || area > best.width * best.height) return c;
+        return best;
+      }, null);
+
+      if (!graphCanvas || graphCanvas.width < 2 || graphCanvas.height < 2) {
+        throw new Error("Graph canvas not ready");
+      }
+
+      const tmp = document.createElement("canvas");
+      tmp.width = graphCanvas.width;
+      tmp.height = graphCanvas.height;
+      const ctx = tmp.getContext("2d");
+      if (!ctx) throw new Error("Could not create export context");
+
+      ctx.fillStyle = "#050a18";
+      ctx.fillRect(0, 0, tmp.width, tmp.height);
+      ctx.drawImage(graphCanvas, 0, 0);
+      downloadJpeg(tmp);
     } catch (err) {
       console.error("[GraphCanvas] JPEG export failed", err);
     } finally {
@@ -904,7 +900,7 @@ export default function GraphCanvas({
       const isDragging = activeDragNodeIdRef.current === nodeId;
       const isHub = hubNodeIdRef.current === nodeId;
       const isPaperNode = Boolean(node.paperLabel);
-      const color = getNodeColor(node);
+      const color = getNodePaperColor(node, graphDataRef.current);
       const titleLines = wrapNodeLabel(getNodeLabel(node));
       const typeLabel = (node.type || "concept").toUpperCase();
       const active = isHovered || isSelected || isDragging;
@@ -912,7 +908,6 @@ export default function GraphCanvas({
       const baseR = isPaperNode ? 11 : 7.5;
       const r = (isHub ? baseR * 1.35 : baseR) + (active ? 1.2 : 0);
 
-      // Outer neon ring
       ctx.save();
       ctx.beginPath();
       ctx.arc(x, y, r + 2.8, 0, Math.PI * 2);
@@ -923,7 +918,6 @@ export default function GraphCanvas({
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Glass fill
       const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, 0, x, y, r);
       g.addColorStop(0, hexToRgba(color, isHub ? 0.28 : 0.2));
       g.addColorStop(0.55, hexToRgba("#0f172a", 0.55));
@@ -933,18 +927,15 @@ export default function GraphCanvas({
       ctx.fillStyle = g;
       ctx.fill();
 
-      // Thick accent border
       ctx.lineWidth = isSelected ? 2.4 : active ? 2 : 1.65;
       ctx.strokeStyle = isSelected ? "#ffffff" : hexToRgba(color, 0.95);
       ctx.stroke();
       ctx.restore();
 
-      // Icon (mockup: glyph at top inside disc)
       const iconY = y - r * 0.52;
       const iconS = r * 0.95;
       drawTypeIcon(ctx, x, iconY, iconS, node.type || "concept");
 
-      // Title + type inside circle
       const titleSize = Math.max(3.1, 3.8 / globalScale);
       const typeSize = Math.max(2.35, 2.85 / globalScale);
       ctx.textAlign = "center";
@@ -1020,7 +1011,9 @@ export default function GraphCanvas({
       const my = ((sourceNode.y ?? 0) + (targetNode.y ?? 0)) / 2;
       const linkId = getLinkId(link);
       const targetGraphNode = nodeById.get(tid);
-      const accent = targetGraphNode ? getNodeColor(targetGraphNode) : "#94a3b8";
+      const accent = targetGraphNode
+        ? getNodePaperColor(targetGraphNode, graphDataRef.current)
+        : "#94a3b8";
       const fontPx = Math.max(8.5, 10.5 / globalScale);
 
       ctx.save();
@@ -1123,7 +1116,9 @@ export default function GraphCanvas({
             const linkId = getLinkId(link);
             const tid = getEndpointId(link.target);
             const targetNode = nodeById.get(tid);
-            const accent = targetNode ? getNodeColor(targetNode) : "#64748b";
+            const accent = targetNode
+              ? getNodePaperColor(targetNode, graphDataRef.current)
+              : "#64748b";
             if (linkId === selectedId) return "#38bdf8";
             if (linkId === effectiveHoveredLinkId) return hexToRgba(accent, 0.88);
             return hexToRgba(accent, 0.38);
@@ -1214,17 +1209,15 @@ export default function GraphCanvas({
         </div>
 
 
-        {legendItems.length > 0 ? (
-          <div className="pointer-events-auto absolute bottom-4 right-4 max-w-[240px]">
+        {paperLegendItems.length > 0 ? (
+          <div className="pointer-events-auto absolute bottom-4 right-4 max-w-[260px]">
             <div className="rounded-2xl border border-gray-800/80 bg-gray-950/80 px-3 py-2.5 shadow-[0_14px_30px_rgba(0,0,0,0.28)] backdrop-blur">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-accent/80">
                     Legend
                   </p>
-                  <p className="mt-1 text-xs text-gray-400">
-                    {legendItems.length} theme{legendItems.length === 1 ? "" : "s"}
-                  </p>
+                  <p className="mt-1 text-xs text-gray-400">Paper colors</p>
                 </div>
                 <button
                   type="button"
@@ -1237,45 +1230,45 @@ export default function GraphCanvas({
 
               {!isLegendExpanded ? (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {compactLegendItems.map((item) => (
+                  {compactPaperLegendItems.map((item) => (
                     <div
-                      key={`${item.themeLabel}-${item.colorHex}`}
-                      className="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/70 px-2.5 py-1.5 text-xs text-gray-300"
+                      key={`${item.colorSlot}-${item.paperNumber}`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/70 px-2.5 py-1.5 text-xs text-gray-300"
                     >
                       <span
-                        className="h-2.5 w-2.5 rounded-full border border-white/20"
+                        className="h-3 w-3 rounded-sm border border-white/25"
                         style={{ backgroundColor: item.colorHex }}
                       />
-                      <span className="max-w-[110px] truncate">{item.themeLabel}</span>
-                      <span className="text-gray-500">{item.count}</span>
+                      <span className="max-w-[140px] truncate">
+                        Color {item.colorSlot}: Paper {item.paperNumber}
+                      </span>
                     </div>
                   ))}
-                  {legendItems.length > compactLegendItems.length ? (
-                    <div className="inline-flex items-center rounded-full border border-gray-800 bg-gray-900/70 px-2.5 py-1.5 text-xs text-gray-500">
-                      +{legendItems.length - compactLegendItems.length} more
+                  {paperLegendItems.length > compactPaperLegendItems.length ? (
+                    <div className="inline-flex items-center rounded-lg border border-gray-800 bg-gray-900/70 px-2.5 py-1.5 text-xs text-gray-500">
+                      +{paperLegendItems.length - compactPaperLegendItems.length} more
                     </div>
                   ) : null}
                 </div>
               ) : (
                 <div className="mt-3 space-y-2.5">
-                  {legendItems.map((item) => (
+                  {paperLegendItems.map((item) => (
                     <div
-                      key={`${item.themeLabel}-${item.colorHex}`}
-                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2.5 rounded-xl border border-gray-800/80 bg-gray-900/55 px-2.5 py-2"
+                      key={`${item.colorSlot}-${item.paperNumber}`}
+                      className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2.5 rounded-xl border border-gray-800/80 bg-gray-900/55 px-2.5 py-2"
                     >
                       <span
-                        className="mt-1 h-3 w-3 rounded-full border border-white/20"
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm border border-white/25"
                         style={{ backgroundColor: item.colorHex }}
                       />
                       <div>
-                        <p className="text-xs font-medium text-gray-100">{item.themeLabel}</p>
+                        <p className="text-xs font-medium text-gray-100">
+                          Color {item.colorSlot}: Paper {item.paperNumber}
+                        </p>
                         <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">
-                          {truncateLegendDescription(item.themeDescription)}
+                          {truncateLegendDescription(item.detail)}
                         </p>
                       </div>
-                      <span className="rounded-full border border-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
-                        {item.count}
-                      </span>
                     </div>
                   ))}
                 </div>
