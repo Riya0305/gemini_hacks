@@ -1361,31 +1361,17 @@ export async function extractGraphFromPdfs(files: File[]): Promise<GraphData> {
   const parts: GeminiPart[] = [
     {
       text: `
-Analyze the uploaded research papers and build a hub-and-spoke knowledge graph with THREE layers:
+Analyze the uploaded research papers and build a knowledge graph with two layers:
+1. **Paper nodes** — one per uploaded PDF. Read the real paper title from the first page of each PDF and use it as the node id. Never use filenames or placeholders.
+2. **Topic nodes** — key concepts, methods, technologies, applications, and authors extracted from each paper (4-8 per paper).
 
-LAYER 1 — PAPER NODES (mother nodes, one per PDF)
-- Read the real paper title from the first page of each PDF. Use it as the node id exactly.
-- Never use filenames, "Paper 1", or placeholders as the node id.
-- Each paper node is a "mother" hub. Everything branches from it.
-
-LAYER 2 — KEY CONCEPT NODES (child nodes, 5-8 per paper)
-- For each paper, extract 5-8 specific, meaningful key concepts: core methods, technologies, findings, applications, or named frameworks from that paper.
-- Be specific: "Transformer Architecture", "Federated Learning", "Epigenetic Clock" — NOT "Analysis", "Results", "Method".
-- Connect EVERY concept back to its parent paper with a clear relation edge (paper → "introduces" / "uses" / "studies" / "proposes" → concept).
-- These are the spokes radiating from each mother node.
-
-LAYER 3 — CROSS-PAPER BRIDGES (shared concept nodes)
-- Actively look for concepts that appear in MORE THAN ONE paper. These MUST use the exact same node id so they become shared bridge nodes.
-- A shared concept node connects to BOTH paper mothers, visually bridging them.
-- Also add direct concept-to-concept edges when two concepts from different papers are related (e.g. one method enables another, one concept builds on another).
-- These bridges are the most important part — they show HOW the papers are intellectually connected.
-
-EDGE RULES:
-- Every paper must connect to every one of its concept children.
-- Every shared concept must connect to every paper that discusses it.
-- Add concept-to-concept edges freely when grounded in the content.
-- Aim for 3x more edges than nodes minimum.
-- relation must be a short verb phrase: "uses", "proposes", "studies", "applies", "extends", "introduces", "shares methods with", "supports", "contrasts with", "enables", "builds on", "implements", "complements", "validates".
+CRITICAL RULES:
+- For each paper, extract 4-8 specific topic nodes and connect the paper to EVERY one of them with an edge.
+- Every topic node MUST have at least one edge connecting it to a paper node.
+- If two papers discuss the same topic, use the SAME topic node id so they share it as a bridge.
+- Connect topic nodes to each other when related.
+- Aim for at least 3x more edges than nodes.
+- Topic nodes must be specific (e.g. "Machine Learning", "Neural Networks") not vague (e.g. "Analysis", "Results").
 - Each paper node must include: displayLabel (2-4 words), paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", "Paper 2", etc.).
 - Topic nodes must NOT have paperLabel set.
 `.trim(),
@@ -1431,7 +1417,64 @@ EDGE RULES:
     enrichedGraph = mergeGraphEdges(graph, heuristicEdges);
   }
 
+  // guarantee every shared topic node is connected to all paper mothers
+  enrichedGraph = enforcePaperToTopicEdges(enrichedGraph);
+
   return applyPaperThemeColors(enrichedGraph);
+}
+
+/**
+ * Guarantees every topic node is connected to at least one paper node.
+ * Orphaned topics get wired to all papers. Topics already connected to
+ * some papers get wired to the remaining ones (bridge enforcement).
+ */
+function enforcePaperToTopicEdges(graph: GraphData): GraphData {
+  const paperNodes = graph.nodes.filter((n) => Boolean(n.paperLabel));
+  const topicNodes = graph.nodes.filter((n) => !n.paperLabel);
+
+  if (paperNodes.length === 0 || topicNodes.length === 0) return graph;
+
+  const existingEdgeKeys = new Set(
+    graph.edges.flatMap((e) => [`${e.source}::${e.target}`, `${e.target}::${e.source}`])
+  );
+
+  // Track which papers each topic is already connected to
+  const topicToPapers = new Map<string, Set<string>>();
+  for (const topic of topicNodes) {
+    topicToPapers.set(topic.id, new Set());
+  }
+  for (const edge of graph.edges) {
+    if (topicToPapers.has(edge.target) && paperNodes.some((p) => p.id === edge.source)) {
+      topicToPapers.get(edge.target)!.add(edge.source);
+    }
+    if (topicToPapers.has(edge.source) && paperNodes.some((p) => p.id === edge.target)) {
+      topicToPapers.get(edge.source)!.add(edge.target);
+    }
+  }
+
+  const newEdges: GraphEdge[] = [];
+
+  for (const topic of topicNodes) {
+    const connectedPapers = topicToPapers.get(topic.id) ?? new Set();
+
+    for (const paper of paperNodes) {
+      if (connectedPapers.has(paper.id)) continue;
+      const key = `${paper.id}::${topic.id}`;
+      if (existingEdgeKeys.has(key)) continue;
+
+      newEdges.push({
+        source: paper.id,
+        target: topic.id,
+        relation: "discusses",
+        explanation: `${paper.displayLabel || paper.id} addresses ${topic.displayLabel || topic.id} as a key concept.`,
+        evidence: topic.evidence || paper.evidence || "Extracted from paper content.",
+      });
+      existingEdgeKeys.add(key);
+    }
+  }
+
+  if (newEdges.length === 0) return graph;
+  return { ...graph, edges: [...graph.edges, ...newEdges] };
 }
 
 export async function askGeminiAboutEdge(
