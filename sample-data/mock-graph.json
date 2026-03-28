@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    { "id": "Edge AI", "type": "technology" },
+    { "id": "Glucose Monitoring", "type": "application" }
+  ],
+  "edges": [
+    {
+      "source": "Edge AI",
+      "target": "Glucose Monitoring",
+      "relation": "enables",
+      "explanation": "Edge AI enables real-time glucose monitoring by processing sensor readings locally.",
+      "evidence": "A paper shows that Edge AI can analyze glucose sensor output with low latency."
+    }
+  ]
+}
