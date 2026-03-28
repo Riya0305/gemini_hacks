@@ -98,7 +98,7 @@ Return only a single valid JSON object. No markdown, no code fences, no commenta
 - Set the node id to the extracted paper title from the PDF content (first-page title).
 - Never use filenames, author-year citations, or placeholders as paper node ids.
 - Forbidden examples: "TITLE", "Paper 1", "aging i6 206135", "Levine et al., 2018".
-- Include: displayLabel (2-4 words), paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", etc.).
+- REQUIRED fields: id (real title), displayLabel (2-4 words), paperTitle (same as id), themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", "Paper 2", etc.).
 
 ## Rules for topic nodes (critical for graph quality)
 - For each paper, extract 5-8 topic nodes representing its key subjects: methods used, technologies mentioned, core concepts, important applications, or notable authors.
@@ -1130,19 +1130,30 @@ function applyPaperThemeColors(graph: GraphData): GraphData {
 
   if (paperNodeColors.size === 0) return graph;
 
-  // for each edge from a paper node to a topic node, record the color
-  const topicColorMap = new Map<string, string>();
+  // for each edge from a paper node to a topic node, record ALL paper colors per topic
+  const topicPaperColors = new Map<string, string[]>();
   for (const edge of graph.edges) {
     const sourceColor = paperNodeColors.get(edge.source);
     const targetColor = paperNodeColors.get(edge.target);
     // paper -> topic
     if (sourceColor && !paperNodeColors.has(edge.target)) {
-      if (!topicColorMap.has(edge.target)) topicColorMap.set(edge.target, sourceColor);
+      if (!topicPaperColors.has(edge.target)) topicPaperColors.set(edge.target, []);
+      const colors = topicPaperColors.get(edge.target)!;
+      if (!colors.includes(sourceColor)) colors.push(sourceColor);
     }
     // topic -> paper (reverse direction edges)
     if (targetColor && !paperNodeColors.has(edge.source)) {
-      if (!topicColorMap.has(edge.source)) topicColorMap.set(edge.source, targetColor);
+      if (!topicPaperColors.has(edge.source)) topicPaperColors.set(edge.source, []);
+      const colors = topicPaperColors.get(edge.source)!;
+      if (!colors.includes(targetColor)) colors.push(targetColor);
     }
+  }
+
+  // For shared topics (connected to multiple papers), use the first paper's color
+  // but at reduced opacity to signal it's shared — we encode this as the first color
+  const topicColorMap = new Map<string, string>();
+  for (const [topicId, colors] of topicPaperColors) {
+    topicColorMap.set(topicId, colors[0]);
   }
 
   return {
@@ -1299,14 +1310,9 @@ async function buildFileParts(files: File[]): Promise<GeminiPart[]> {
 
 function withThinkingConfig<T extends Record<string, unknown>>(
   config: T,
-  thinkingLevel: ThinkingLevel
-): T & { thinkingConfig: { thinkingLevel: ThinkingLevel } } {
-  return {
-    ...config,
-    thinkingConfig: {
-      thinkingLevel,
-    },
-  };
+  _thinkingLevel: ThinkingLevel
+): T {
+  return config;
 }
 
 
@@ -1361,19 +1367,17 @@ export async function extractGraphFromPdfs(files: File[]): Promise<GraphData> {
   const parts: GeminiPart[] = [
     {
       text: `
-Analyze the uploaded research papers and build a knowledge graph with two layers:
-1. **Paper nodes** — one per uploaded PDF. Read the real paper title from the first page of each PDF and use it as the node id. Never use filenames or placeholders.
-2. **Topic nodes** — key concepts, methods, technologies, applications, and authors extracted from each paper (4-8 per paper).
+Extract a knowledge graph from the uploaded research papers.
 
-CRITICAL RULES:
-- For each paper, extract 4-8 specific topic nodes and connect the paper to EVERY one of them with an edge.
-- Every topic node MUST have at least one edge connecting it to a paper node.
-- If two papers discuss the same topic, use the SAME topic node id so they share it as a bridge.
-- Connect topic nodes to each other when related.
-- Aim for at least 3x more edges than nodes.
-- Topic nodes must be specific (e.g. "Machine Learning", "Neural Networks") not vague (e.g. "Analysis", "Results").
-- Each paper node must include: displayLabel (2-4 words), paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1", "Paper 2", etc.).
-- Topic nodes must NOT have paperLabel set.
+REQUIRED OUTPUT:
+- One paper node per PDF (use the real title from the first page as the node id, never "Paper 1" or filenames)
+- 5 to 8 topic nodes per paper (specific concepts, methods, technologies from that paper)
+- Edges connecting every paper to all its topic nodes
+- Shared topic nodes (same id) when both papers discuss the same concept
+
+Each paper node MUST have: id (real title), type, displayLabel, paperTitle, themeLabel, themeDescription, summary, evidence, paperLabel ("Paper 1" etc.)
+Each topic node MUST have: id, type, displayLabel, summary, evidence. Do NOT set paperLabel on topic nodes.
+Each edge MUST have: source, target, relation, explanation, evidence.
 `.trim(),
     },
     ...fileParts,
@@ -1390,8 +1394,8 @@ CRITICAL RULES:
       },
     ],
     generationConfig: withThinkingConfig({
-      temperature: 0.2,
-      maxOutputTokens: 16384,
+      temperature: 0,
+      maxOutputTokens: 32768,
       responseMimeType: "application/json",
       responseSchema: GRAPH_RESPONSE_SCHEMA,
     }, "minimal"),

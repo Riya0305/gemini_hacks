@@ -100,6 +100,12 @@ function getNodeColor(node: GraphNode): string {
 }
 
 function getNodeLabel(node: GraphNode): string {
+  // For paper nodes, show the actual paper title (truncated for canvas)
+  if (node.paperLabel) {
+    const title = node.paperTitle || node.id;
+    // Truncate long titles to fit the canvas label box
+    return title.length > 28 ? `${title.slice(0, 26).trimEnd()}…` : title;
+  }
   return node.displayLabel || node.paperTitle || node.id;
 }
 

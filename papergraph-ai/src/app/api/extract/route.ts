@@ -78,11 +78,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json(graph);
   } catch (error) {
+    console.error("[extract] Error:", error);
     if (isRouteError(error)) {
+      console.error("[extract] RouteError status:", (error as RouteError).status, "message:", error.message);
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
     if (error instanceof SyntaxError) {
+      console.error("[extract] SyntaxError — Gemini returned unparseable JSON:", error.message);
       const fallback = buildFallbackGraph(files);
 
       persistExtraction(files, fallback).catch((err) =>
